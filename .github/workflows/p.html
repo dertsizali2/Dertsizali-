@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Altın & Gümüş Portföyüm</title>
+<style>
+:root{--bg:#0f1115;--card:#181b22;--tx:#eceff4;--mut:#8b93a3;--gold:#e5b94a;--ag:#c4ccd8;--ok:#4ade80;--bad:#f87171;--bd:#262b36}
+@media(prefers-color-scheme:light){:root{--bg:#f5f3ee;--card:#fff;--tx:#1b1e25;--mut:#6b7280;--gold:#a67c00;--ag:#5b6573;--bd:#e5e1d8}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.4 system-ui,sans-serif;padding:16px;max-width:760px;margin:auto}
+h1{font-size:20px;margin:4px 0 12px}
+.total{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:18px;text-align:center}
+.total small{color:var(--mut)}.total b{display:block;font-size:34px;color:var(--gold);margin:4px 0}
+.row{display:flex;gap:8px;margin:12px 0;align-items:center;flex-wrap:wrap}
+button{background:var(--card);color:var(--tx);border:1px solid var(--bd);border-radius:8px;padding:7px 12px;font-size:14px;cursor:pointer}
+button.on{border-color:var(--gold);color:var(--gold)}
+.sp{flex:1}
+.tw{overflow-x:auto;background:var(--card);border:1px solid var(--bd);border-radius:14px}
+table{width:100%;border-collapse:collapse;min-width:520px}
+th,td{padding:11px 12px;text-align:right;border-bottom:1px solid var(--bd);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}th{color:var(--mut);font-weight:500;font-size:12px}
+tr:last-child td{border-bottom:0}tfoot td{font-weight:700}
+.src{font-size:11px;color:var(--mut)}
+#st{font-size:12px;color:var(--mut);margin-top:10px}.err{color:var(--bad)}
+</style>
+</head>
+<body>
+<h1>🪙 Portföyüm</h1>
+<div class="total"><small>Toplam değer (TL)</small><b id="tot">…</b><small id="usd"></small></div>
+<div class="row">
+  <button id="bA" class="on">Alış (satarsam)</button>
+  <button id="bS">Satış (alırsam)</button>
+  <span class="sp"></span>
+  <button id="rf">↻ Yenile</button>
+</div>
+<div class="tw"><table>
+<thead><tr><th>Varlık</th><th>Adet</th><th>Birim fiyat</th><th>Toplam</th></tr></thead>
+<tbody id="tb"></tbody>
+<tfoot><tr><td colspan="3">Genel toplam</td><td id="ft">–</td></tr></tfoot>
+</table></div>
+<div id="st">Yükleniyor…</div>
+
+<script>
+// ---- PORTFÖY ----
+// pure: bir adetteki saf (24 ayar) altın gramı. Sarrafiye: 22 ayar (0,916)
+const HOLD=[
+ {k:'ata',  ad:'Ata (Tam) Altın', n:1,  tr:['ata-altin','tam-altin'], pure:6.608, m:'XAU'},
+ {k:'ceyrek',ad:'Çeyrek Altın',   n:2,  tr:['ceyrek-altin'],          pure:1.604, m:'XAU'},
+ {k:'yarim',ad:'Yarım Altın',     n:2,  tr:['yarim-altin'],           pure:3.208, m:'XAU'},
+ {k:'gram', ad:'Gram Altın (24k)',n:1,  tr:['gram-altin'],            pure:1,     m:'XAU'},
+ {k:'gumus',ad:'Granül Gümüş (gr)',n:62,tr:['gumus','gram-gumus'],    pure:1,     m:'XAG'}
+];
+let mode='A', DATA=null;
+const OZ=31.1034768;
+const tl=v=>v.toLocaleString('tr-TR',{style:'currency',currency:'TRY',maximumFractionDigits:2});
+
+// "3.456,78" veya sayı -> number
+function num(x){
+  if(typeof x==='number')return x;
+  if(typeof x!=='string')return NaN;
+  const s=x.replace(/[^\d.,-]/g,'');
+  return parseFloat(s.includes(',')?s.replace(/\./g,'').replace(',','.'):s);
+}
+async function j(u){
+  const c=new AbortController();setTimeout(()=>c.abort(),9000);
+  const r=await fetch(u,{signal:c.signal,cache:'no-store'});
+  if(!r.ok)throw new Error(u+' '+r.status);return r.json();
+}
+const pick=(o,names)=>{for(const n of names){for(const k of Object.keys(o||{})){
+  if(k.toLowerCase()===n.toLowerCase())return o[k];}}return null};
+
+async function load(){
+  const st=document.getElementById('st');st.textContent='Veriler çekiliyor…';st.className='';
+  const out={tr:null,spot:null,fx:null,errs:[]};
+  // 1) Türkiye piyasa fiyatları (Truncgil)
+  try{out.tr=await j('https://finans.truncgil.com/today.json')}catch(e){out.errs.push('Truncgil')}
+  // 2) Küresel spot + kur (yedek / doğrulama)
+  try{
+    const [au,ag,fx]=await Promise.all([
+      j('https://api.gold-api.com/price/XAU'),
+      j('https://api.gold-api.com/price/XAG'),
+      j('https://open.er-api.com/v6/latest/USD')]);
+    out.spot={XAU:au.price,XAG:ag.price};out.fx=fx.rates.TRY;
+  }catch(e){out.errs.push('Spot/Kur')}
+  DATA=out;render();
+}
+
+function render(){
+  if(!DATA)return;
+  let total=0,okAll=true;const tb=document.getElementById('tb');tb.innerHTML='';
+  for(const h of HOLD){
+    let unit=NaN,src='';
+    const e=DATA.tr&&pick(DATA.tr,h.tr);
+    if(e){
+      const a=num(pick(e,['Alış','Alis','buying'])),s=num(pick(e,['Satış','Satis','selling']));
+      unit=mode==='A'?(a||s):(s||a);
+      if(!isNaN(unit))src='Piyasa (Truncgil)';
+    }
+    if(isNaN(unit)&&DATA.spot&&DATA.fx){
+      unit=DATA.spot[h.m]/OZ*DATA.fx*h.pure;
+      src='Spot hesap (çıplak metal)';
+    }
+    const sum=unit*h.n;
+    if(isNaN(sum)){okAll=false}else total+=sum;
+    tb.insertAdjacentHTML('beforeend',`<tr><td>${h.ad}<div class="src">${src||'veri yok'}</div></td><td>${h.n}</td><td>${isNaN(unit)?'–':tl(unit)}</td><td>${isNaN(sum)?'–':tl(sum)}</td></tr>`);
+  }
+  document.getElementById('tot').textContent=okAll?tl(total):(total?tl(total)+' *':'–');
+  document.getElementById('ft').textContent=total?tl(total):'–';
+  document.getElementById('usd').textContent=DATA.fx?`≈ ${(total/DATA.fx).toLocaleString('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0})} · USD/TRY ${DATA.fx.toFixed(2)} · ONS ${DATA.spot.XAU.toFixed(0)}$ / Gümüş ${DATA.spot.XAG.toFixed(2)}$`:'';
+  const st=document.getElementById('st');
+  st.innerHTML=`Son güncelleme: ${new Date().toLocaleTimeString('tr-TR')}`+(DATA.errs.length?` · <span class="err">Alınamayan kaynak: ${DATA.errs.join(', ')}</span>`:'')+(okAll?'':' · <span class="err">* eksik veri var, toplam kısmi</span>')+'<br>Spot hesapta sarrafiye işçilik/makas primi yoktur; gerçek kuyumcu fiyatı biraz farklı olabilir.';
+}
+bA.onclick=()=>{mode='A';bA.className='on';bS.className='';render()};
+bS.onclick=()=>{mode='S';bS.className='on';bA.className='';render()};
+rf.onclick=load;
+load();setInterval(load,60000);
+</script>
+</body>
+</html>
